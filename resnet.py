@@ -11,21 +11,21 @@ from torch.nn.parallel import DistributedDataParallel, DataParallel
 class PreActBasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, in_planes, planes, stride=1, w_bit=32, a_bit=32):
+    def __init__(self, in_planes, planes, stride=1, w_bit=32, a_bit=32, device=None):
         super(PreActBasicBlock, self).__init__()
 
         self.relu = nn.ReLU(inplace=True)
         self.bn1 = nn.BatchNorm2d(in_planes)
-        self.quant_activation_1 = QActivation(a_bit)
-        self.quant_conv1 = QConv2d(in_planes, planes, 3, stride, padding=1, bit=w_bit)
+        self.quant_activation_1 = QActivation(a_bit, device)
+        self.quant_conv1 = QConv2d(in_planes, planes, 3, stride, padding=1, bit=w_bit, device=device)
 
         self.bn2 = nn.BatchNorm2d(planes)
-        self.quant_activation_2 = QActivation(a_bit)
-        self.quant_conv2 = QConv2d(planes, planes, 3, padding=1, bit=w_bit)
+        self.quant_activation_2 = QActivation(a_bit, device)
+        self.quant_conv2 = QConv2d(planes, planes, 3, padding=1, bit=w_bit, device=device)
 
         if stride != 1 or in_planes != planes * PreActBasicBlock.expansion:
             self.shortcut = nn.Sequential(
-                QConv2d(in_planes, planes * PreActBasicBlock.expansion, 1, stride, bit=w_bit))
+                QConv2d(in_planes, planes * PreActBasicBlock.expansion, 1, stride, bit=w_bit, device=device))
 
     def forward(self, x):
 
@@ -48,7 +48,7 @@ class PreActBasicBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, layers, num_classes=1000, w_bit=32, a_bit=32):
+    def __init__(self, block, layers, num_classes=1000, w_bit=32, a_bit=32, device=None):
         super(ResNet, self).__init__()
 
         self.num_classes = num_classes
@@ -56,6 +56,7 @@ class ResNet(nn.Module):
         self.dilation = 1
         self.w_bit = w_bit
         self.a_bit = a_bit
+        self.device = device
 
         if num_classes == 10:
             self.in_planes = 16
@@ -100,11 +101,11 @@ class ResNet(nn.Module):
 
         layers = []
 
-        layers.append(block(self.in_planes, planes, stride, w_bit=self.w_bit, a_bit=self.a_bit))
+        layers.append(block(self.in_planes, planes, stride, w_bit=self.w_bit, a_bit=self.a_bit, device=self.device))
 
         self.in_planes = planes * block.expansion
         for num_block in range(1, layer):
-            layers.append(block(self.in_planes, planes, w_bit=self.w_bit, a_bit=self.a_bit))
+            layers.append(block(self.in_planes, planes, w_bit=self.w_bit, a_bit=self.a_bit, device=self.device))
             self.in_planes = planes * block.expansion
 
         return nn.Sequential(*layers)
@@ -116,14 +117,14 @@ class ResNet(nn.Module):
         x = self.relu(x)
 
         # FIXME: maxpooling 버그인가...?
-        # if self.num_classes == 1000:
-        x = self.maxpooling(x)
+        if self.num_classes == 1000:
+            x = self.maxpooling(x)
 
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
-        # if self.num_classes == 1000:
-        x = self.layer4(x)
+        if self.num_classes == 1000:
+            x = self.layer4(x)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)

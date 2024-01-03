@@ -16,6 +16,7 @@ import torch.backends.cudnn as cudnn
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
+device = None
 
 """ Logger 등록 """
 logging = get_logger('./log', log_config='./logging.json')
@@ -62,7 +63,7 @@ def train(model, criterion, optimizer, lr_scheduler, train_loader, EPOCH, args):
     model.train()
     train_loss = .0
     with tqdm(train_loader) as tbar:
-        for i, data in enumerate(tbar):
+        for i, (imgs, targets) in enumerate(tbar):
             optimizer.zero_grad()
 
             if args.gpu is not None:
@@ -114,7 +115,7 @@ def validation(model, criterion, val_loader, EPOCH, args):
             correct += (pred_idx == targets).sum()
     acc = 100 * correct / total
 
-    model_logger.logger.info(f'EPOCH: {EPOCH} | '
+    model_logger.info(f'EPOCH: {EPOCH} | '
                              f'Loss: {val_loss / (i + 1):.4f} | '
                              f'Accuracy: {acc:.4f}%')
 
@@ -131,7 +132,7 @@ def initialize_param(model, train_set, train_sampler, interval_lr, weight_lr):
     handle_hooks = []
     for module_name, module in model.named_modules():
         if isinstance(module, Transformer):
-            h = Hook(module, module_name, flag=True)
+            h = Hook(module, module_name, backward=True)
             handle_hooks.append(h)
 
     """ Batch_size만큼 Iteration 1회를 통해서 c_x, d_x 초기값 구하기 """
@@ -177,20 +178,24 @@ def initialize_param(model, train_set, train_sampler, interval_lr, weight_lr):
     lr_scheduler = None
 
 def main(args, **kwargs):
-
+    global device
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     num_device_per_node = torch.cuda.device_count()
     args.multiprocessing_distributed = False
+    
     if args.multiprocessing_distributed:
         args.world_size = num_device_per_node * args.world_size
         mp.spawn(main_worker, nprocs=num_device_per_node, args=(num_device_per_node, args, kwargs))
     else:
-        main_worker(args.gpu, num_device_per_node, args, kwargs)
+        main_worker(args.gpu, num_device_per_node, args, **kwargs)
 
 
 def main_worker(gpu, num_device_per_node, args, **kwargs):
 
     """ CONFIG """
     w_bit, a_bit = kwargs.get('w_bit'), kwargs.get('a_bit')
+    print('w/a is respectively ', w_bit, a_bit)
+    print('kwargs are ', kwargs)
 
     if w_bit == 32:
         pass
@@ -207,8 +212,8 @@ def main_worker(gpu, num_device_per_node, args, **kwargs):
         print(f'pretrain_model_path: {args.pretrain_model_path}')
 
     args.gpu = gpu
-    kwargs['gpu'] = gpu
-
+    global device
+    kwargs['device'] = device
 
     if args.gpu is not None:
         print(f'Use GPU: {args.gpu} for training')
@@ -264,7 +269,7 @@ def main_worker(gpu, num_device_per_node, args, **kwargs):
     else:
         train_sampler = None
 
-
+    kwargs['gpu'] = gpu
 
     if args.gpu is None:
         if w_bit != 32 and a_bit != 32:
@@ -330,11 +335,16 @@ def main_worker(gpu, num_device_per_node, args, **kwargs):
                 check_interval_param(param_logger, model)
 
             """ Save Model """
+            #test args, pass
+            # print(args.multiprocessing_distributed, args.multiprocessing_distributed, \
+            #     args.rank, num_device_per_node, args.rank % num_device_per_node, \
+            #         (not False or (False and True)))
+            
             if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % num_device_per_node == 0):
                 if best_acc < acc:
                     best_acc = acc
-                    check_point = {'state_dict': model.module.state_dict(),
+                    check_point = {'state_dict': model.state_dict(),
                                'optim': optimizer.state_dict(),
                                'EPOCH': EPOCH,
                                'Acc': best_acc.round()}

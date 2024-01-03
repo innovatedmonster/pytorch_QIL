@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class Transformer(nn.Module):
-    def __init__(self, name):
+    def __init__(self, name, device):
         super(Transformer, self).__init__()
 
         self.name = name
@@ -13,7 +13,7 @@ class Transformer(nn.Module):
         self.c_delta = nn.Parameter(torch.tensor([0.1]))
         self.d_delta = nn.Parameter(torch.tensor([0.05]))
         if name == 'weight':
-            self.gamma = torch.tensor([1.0])
+            self.gamma = torch.tensor([1.0]).to(device)
         else:
             self.gamma = None
 
@@ -48,12 +48,15 @@ class Transformer(nn.Module):
 
     def _weight_transform(self, weight, alpha, beta, prun_point, clip_point):
 
+        #test, 问题出在self.gamma上, 已修正
+        # print(self.gamma.device, weight.device, alpha.device, beta.device, prun_point.device, clip_point.device)
+        
         """ transformer T_w Eq(3) """
         hat_w = torch.where(torch.lt(torch.abs(weight), prun_point), torch.zeros_like(weight),
                            torch.where(torch.gt(torch.abs(weight), clip_point), torch.sign(weight),
                                        torch.pow(alpha * torch.abs(weight) + beta,
                                                  self.gamma) * torch.sign(weight)))
-
+        
         return hat_w
 
     def _activation_transform(self, x, alpha, beta, prun_point, clip_point):
@@ -156,11 +159,11 @@ class Discretizer(torch.autograd.Function):
 
 
 class Quantizer(nn.Module):
-    def __init__(self, bit, name):
+    def __init__(self, bit, name, device):
         super(Quantizer, self).__init__()
         self.bit = bit
         self.name = name
-        self.transformer = Transformer(name)
+        self.transformer = Transformer(name, device)
 
     def forward(self, x):
 
@@ -174,11 +177,11 @@ class Quantizer(nn.Module):
 
 class QConv2d(nn.Conv2d):
     def __init__(self, in_channel, out_channel, kernel_size,
-                 stride=1, padding=0, dilation=1, groups=1, bias=False, bit=32):
+                 stride=1, padding=0, dilation=1, groups=1, bias=False, bit=32, device=None):
         super(QConv2d, self).__init__(
             in_channel, out_channel, kernel_size, stride, padding, dilation, groups, bias)
         self.bit = bit
-        self.quantized_weight = Quantizer(bit, 'weight')
+        self.quantized_weight = Quantizer(bit, 'weight', device)
 
     def forward(self, x):
         w_q = self.quantized_weight(self.weight)
@@ -186,9 +189,9 @@ class QConv2d(nn.Conv2d):
 
 
 class QActivation(nn.Module):
-    def __init__(self, bit=32):
+    def __init__(self, bit=32, device=None):
         super(QActivation, self).__init__()
-        self.quantized_activation = Quantizer(bit, 'activation')
+        self.quantized_activation = Quantizer(bit, 'activation', device)
 
     def forward(self, x):
         return self.quantized_activation(x)
